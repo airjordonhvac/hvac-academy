@@ -147,6 +147,7 @@
   @media(max-width:560px){.whoami input{width:110px}.ring{width:96px;height:96px}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>if(!window.supabase){document.write('<script src="https://unpkg.com/@supabase/supabase-js@2"><\/script>');}</script>
 </head>
 <body>
 <header class="top">
@@ -2145,36 +2146,40 @@ async function onAuthed(user){
   showLoading("Checking access…");
   if(!isAdmin){
     let ok=false;
-    try{ const r=await sb.rpc("academy_email_allowed",{p_email:AUTH.email}); ok=!!r.data; }catch(e){ ok=false; }
+    try{ const r=await withTimeout(sb.rpc("academy_email_allowed",{p_email:AUTH.email}),8000,"access check"); ok=!!r.data; }catch(e){ console.error("approval check:",e); showLogin("Couldn't verify access — please try signing in again."); return; }
     if(!ok){ showPending(); return; }
   }
   showLoading("Loading your progress…");
-  const remote=await loadRemote();
-  if(remote&&remote.progress&&Object.keys(remote.progress).length){
-    S=Object.assign({},dflt,remote.progress);
-  }else{
-    // first sign-in: keep any local progress on this device and push it up
-    S=load();
-    await saveRemote();
-  }
+  try{
+    const remote=await withTimeout(loadRemote(),8000,"progress load");
+    if(remote&&remote.progress&&Object.keys(remote.progress).length){
+      S=Object.assign({},dflt,remote.progress);
+    }else{
+      S=load();
+      try{ await withTimeout(saveRemote(),8000,"progress save"); }catch(e){ console.error("saveRemote:",e); }
+    }
+  }catch(e){ console.error("loadRemote:",e); S=load(); }
   showApp();
 }
+function withTimeout(promise,ms,label){return Promise.race([promise,new Promise((_,rej)=>setTimeout(()=>rej(new Error((label||"operation")+" timed out")),ms))]);}
 async function boot(){
   if(!sb){
     nav.innerHTML="";$("#authArea").innerHTML="";nameInput.style.display="none";
-    $("#view").innerHTML=`<div class="auth-wrap"><div class="card"><div class="eyebrow">Setup needed</div><h2 style="font-size:26px;margin:6px 0 8px">Sign-in not configured yet</h2><p class="muted">The Supabase connection key hasn't been set in this build. Once it's added, magic-link sign-in and cloud progress will be active.</p></div></div>`;
+    $("#view").innerHTML=`<div class="auth-wrap"><div class="card"><div class="eyebrow">Connection problem</div><h2 style="font-size:26px;margin:6px 0 8px">Couldn't load sign-in</h2><p class="muted">The Academy couldn't reach its sign-in service (this is usually a network or ad-blocker issue). Check your connection and reload the page.</p><button class="btn gold" onclick="location.reload()" style="margin-top:14px;width:100%;justify-content:center">Reload</button></div></div>`;
     return;
   }
   showLoading("Loading…");
   try{
-    const {data}=await sb.auth.getSession();
+    const {data}=await withTimeout(sb.auth.getSession(),8000,"session check");
     if(data&&data.session&&data.session.user){ await onAuthed(data.session.user); }
     else { showLogin(); }
-  }catch(e){ showLogin(); }
-  sb.auth.onAuthStateChange((evt,sess)=>{
-    if(evt==="SIGNED_IN"&&sess&&sess.user&&!AUTH){ onAuthed(sess.user); }
-    else if(evt==="SIGNED_OUT"){ AUTH=null;isAdmin=false;S=Object.assign({},dflt);showLogin(); }
-  });
+  }catch(e){ console.error("boot:",e); showLogin(); }
+  try{
+    sb.auth.onAuthStateChange((evt,sess)=>{
+      if(evt==="SIGNED_IN"&&sess&&sess.user&&!AUTH){ onAuthed(sess.user); }
+      else if(evt==="SIGNED_OUT"){ AUTH=null;isAdmin=false;S=Object.assign({},dflt);showLogin(); }
+    });
+  }catch(e){ console.error("authStateChange:",e); }
 }
 boot();
 
